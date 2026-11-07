@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         MadOctopus -> Google Sheet
 // @namespace    nguyez-madoctopus
-// @version      1.3
-// @description  Cào Game catalog MadOctopus (17 cột) - loc theo gia / % review / so review + lam anh lich to nhat (460px) rồi gửi thẳng vào tab MadOctopus qua Apps Script Web App.
+// @version      1.4
+// @description  Cào Game catalog MadOctopus (17 cột) - lọc theo giá / % review / số review + làm ảnh lịch to nhất (460px). Không hiện bảng nổi trên trang, tất cả tùy chọn ở trong menu Tampermonkey.
 // @match        https://madoctopus.fun/creators/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
+// @grant        GM_notification
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
 // @updateURL    https://raw.githubusercontent.com/NguyeZcom/madoctopus/main/madoctopus-tampermonkey.user.js
@@ -80,33 +81,52 @@
   }
   applyCalendarBigImages();
 
-  GM_registerMenuCommand('Đặt Apps Script Web App URL', () => {
-    const u = prompt('Dán Apps Script Web App URL (/exec):', WEBAPP_URL);
-    if (u) { WEBAPP_URL = u.trim(); GM_setValue('mo_webapp_url', WEBAPP_URL); alert('Đã lưu Web App URL.'); }
-  });
-
-  // Bo loc: gia duoi muc nay thi bo, game chua co gia van lay. % review / so review tuong tu: co review ma duoi muc thi bo, chua co review van lay. 0 = khong loc muc do.
+  // ---- Tuy chon: TAT CA o trong menu Tampermonkey, KHONG hien bang noi tren trang ----
+  // Bấm vào biểu tượng Tampermonkey trên thanh công cụ > tên script này > sẽ thấy các mục dưới đây.
+  // Không còn nút / bảng nổi ở góc phải dưới nữa.
   let FILTERS = {
     minPrice: parseFloat(GM_getValue('mo_min_price', '0')) || 0,
     minReviewPct: parseFloat(GM_getValue('mo_min_review_pct', '50')) || 0,
     minReviewCount: parseFloat(GM_getValue('mo_min_review_count', '0')) || 0,
   };
-  const panel = document.createElement('div');
-  panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:99999;background:#111;color:#fff;padding:12px;border-radius:10px;font:13px/1.5 Arial,sans-serif;box-shadow:0 4px 20px rgba(0,0,0,.4);max-width:360px';
-  panel.innerHTML = '<b>MadOctopus → Sheet</b><div id="mo-status" style="margin:6px 0">Sẵn sàng. Mở Game catalog rồi bấm Cào.</div>' +
-    '<div style="margin:6px 0;font-size:12px">Lọc (0 = không lọc):<br>' +
-    'Giá tối thiểu $ <input id="mo-f-price" type="number" min="0" step="1" value="' + FILTERS.minPrice + '" style="width:60px"> &nbsp; ' +
-    '% review tối thiểu <input id="mo-f-pct" type="number" min="0" max="100" step="1" value="' + FILTERS.minReviewPct + '" style="width:60px"><br>' +
-    'Số review tối thiểu <input id="mo-f-count" type="number" min="0" step="1" value="' + FILTERS.minReviewCount + '" style="width:60px"> &nbsp; <span style="color:#aaa">chưa có giá/review vẫn lấy</span></div>' +
-    '<button id="mo-run" style="background:#ff6b35;color:#fff;border:0;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:bold">Cào hết &amp; gửi vào Sheet</button> ' +
-    '<button id="mo-seturl" style="background:#444;color:#fff;border:0;padding:8px 10px;border-radius:6px;cursor:pointer">Đặt URL</button>';
-  document.body.appendChild(panel);
-  panel.querySelector('#mo-seturl').onclick = () => {
+  function setStatus(msg) {
+    console.log('[MadOctopus]', msg);
+    // Chi thong bao khi xong hoac loi, khong spam giua chung
+    if (/^XONG|^Lỗi|^Dừng/.test(msg)) {
+      try { GM_notification({ title: 'MadOctopus', text: msg, timeout: 8000 }); } catch (e) {}
+    }
+  }
+  function askNumber(label, current) {
+    const v = prompt(label + ' (hiện tại: ' + current + ', nhập 0 = không lọc):', String(current));
+    if (v === null) return null;
+    const n = parseFloat(v);
+    return isNaN(n) || n < 0 ? 0 : n;
+  }
+  GM_registerMenuCommand('▶ Cào hết & gửi vào Sheet', () => run().catch(e => setStatus('Lỗi: ' + e.message)));
+  GM_registerMenuCommand('Đặt Apps Script Web App URL', () => {
     const u = prompt('Dán Apps Script Web App URL (/exec):', WEBAPP_URL);
-    if (u) { WEBAPP_URL = u.trim(); GM_setValue('mo_webapp_url', WEBAPP_URL); setStatus('Đã lưu Web App URL.'); }
-  };
-  function setStatus(s) { const el = document.getElementById('mo-status'); if (el) el.textContent = s; console.log('[MadOctopus]', s); }
-  panel.querySelector('#mo-run').onclick = () => run().catch(e => setStatus('Lỗi: ' + e.message));
+    if (u) { WEBAPP_URL = u.trim(); GM_setValue('mo_webapp_url', WEBAPP_URL); alert('Đã lưu Web App URL.'); }
+  });
+  GM_registerMenuCommand('Đặt lọc: Giá tối thiểu $ (hiện tại: ' + FILTERS.minPrice + ')', () => {
+    const n = askNumber('Giá tối thiểu $ - game nào giá dưới mức này thì bỏ, chưa có giá vẫn lấy', FILTERS.minPrice);
+    if (n !== null) { FILTERS.minPrice = n; GM_setValue('mo_min_price', String(n)); alert('Đã lưu: Giá tối thiểu $' + n); }
+  });
+  GM_registerMenuCommand('Đặt lọc: % review tối thiểu (hiện tại: ' + FILTERS.minReviewPct + ')', () => {
+    const n = askNumber('% review tối thiểu - game nào có review mà % dưới mức này thì bỏ, chưa có review vẫn lấy', FILTERS.minReviewPct);
+    if (n !== null) { FILTERS.minReviewPct = n; GM_setValue('mo_min_review_pct', String(n)); alert('Đã lưu: % review tối thiểu ' + n); }
+  });
+  GM_registerMenuCommand('Đặt lọc: Số review tối thiểu (hiện tại: ' + FILTERS.minReviewCount + ')', () => {
+    const n = askNumber('Số review tối thiểu - game nào có review mà số review dưới mức này thì bỏ, chưa có review vẫn lấy', FILTERS.minReviewCount);
+    if (n !== null) { FILTERS.minReviewCount = n; GM_setValue('mo_min_review_count', String(n)); alert('Đã lưu: Số review tối thiểu ' + n); }
+  });
+  GM_registerMenuCommand('Xem bộ lọc hiện tại', () => {
+    alert('Bộ lọc hiện tại:\n- Giá tối thiểu: $' + FILTERS.minPrice + ' (0 = không lọc)\n- % review tối thiểu: ' + FILTERS.minReviewPct + '%\n- Số review tối thiểu: ' + FILTERS.minReviewCount + ' (0 = không lọc)\n\nChưa có giá / review vẫn lấy.');
+  });
+  GM_registerMenuCommand('Tắt hết lọc (đặt tất cả về 0)', () => {
+    FILTERS = { minPrice: 0, minReviewPct: 0, minReviewCount: 0 };
+    GM_setValue('mo_min_price', '0'); GM_setValue('mo_min_review_pct', '0'); GM_setValue('mo_min_review_count', '0');
+    alert('Đã tắt hết lọc.');
+  });
 
   function findCards() {
     const btns = [...document.querySelectorAll('button, a')].filter(el =>
@@ -209,10 +229,10 @@
   }
 
   async function run() {
-    FILTERS.minPrice = parseFloat(document.getElementById('mo-f-price').value) || 0;
-    FILTERS.minReviewPct = parseFloat(document.getElementById('mo-f-pct').value) || 0;
-    FILTERS.minReviewCount = parseFloat(document.getElementById('mo-f-count').value) || 0;
-    GM_setValue('mo_min_price', String(FILTERS.minPrice)); GM_setValue('mo_min_review_pct', String(FILTERS.minReviewPct)); GM_setValue('mo_min_review_count', String(FILTERS.minReviewCount));
+    // Loc lay tu bo nho Tampermonkey (da dat qua menu), khong doc tu bang noi nua
+    FILTERS.minPrice = parseFloat(GM_getValue('mo_min_price', '0')) || 0;
+    FILTERS.minReviewPct = parseFloat(GM_getValue('mo_min_review_pct', '50')) || 0;
+    FILTERS.minReviewCount = parseFloat(GM_getValue('mo_min_review_count', '0')) || 0;
     if (!WEBAPP_URL || WEBAPP_URL.indexOf('script.google.com/macros/s/') === -1) {
       setStatus('Chưa có Web App URL. Bấm "Đặt URL" và dán URL /exec của Apps Script trước.');
       const u = prompt('Dán Apps Script Web App URL (/exec):', '');
