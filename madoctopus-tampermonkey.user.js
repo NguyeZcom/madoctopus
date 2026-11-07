@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MadOctopus -> Google Sheet
 // @namespace    nguyez-madoctopus
-// @version      1.4
-// @description  Cào Game catalog MadOctopus (17 cột) - lọc theo giá / % review / số review + làm ảnh lịch to nhất (460px). Không hiện bảng nổi trên trang, tất cả tùy chọn ở trong menu Tampermonkey.
+// @version      1.6
+// @description  Cào Game catalog MadOctopus (17 cột) - lọc theo giá / % review / số review + làm ảnh lịch to nhất (460px). Chỉ có 2 mục trong menu Tampermonkey: CÀO và Cài đặt. Bấm Cài đặt mới hiện bảng chọn, bình thường không hiện gì trên trang.
 // @match        https://madoctopus.fun/creators/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -81,9 +81,59 @@
   }
   applyCalendarBigImages();
 
-  // ---- Tuy chon: TAT CA o trong menu Tampermonkey, KHONG hien bang noi tren trang ----
-  // Bấm vào biểu tượng Tampermonkey trên thanh công cụ > tên script này > sẽ thấy các mục dưới đây.
-  // Không còn nút / bảng nổi ở góc phải dưới nữa.
+  // ---- Danh sach game chinh (/creators/): anh to full, de luot ----
+  // Trang catalog hien tai: 5 cot, the rong 286px, anh chi 286x126px (26% the),
+  // the cao ~488px, phan lon la chu + khoang trong. Anh goc Steam header 460x215.
+  // Giai phap: xuong con 3 cot -> the rong ~485px, anh hien 460x215 net nhat,
+  // the tu cao theo noi dung (khong keo dai theo the cao nhat trong hang),
+  // thu gon thanh loc dinh tren va phan tren trang de de luot hon.
+  function applyCatalogBigImages() {
+    if (location.search.includes('view=calendar')) return;
+    if (!location.pathname.includes('/creators')) return;
+    if (document.getElementById('mo-catalog-css')) { tagCatalogCards(); return; }
+    const style = document.createElement('style');
+    style.id = 'mo-catalog-css';
+    style.textContent = `
+      /* Luoi 5 cot -> 3 cot, anh rong gan bang anh goc */
+      body.mo-cat-big .mo-cat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; gap: 16px !important; }
+      body.mo-cat-big .mo-cat-card { height: auto !important; min-height: 0 !important; align-self: start !important; }
+      body.mo-cat-big .mo-cat-card > a:first-child { display: block !important; width: 100% !important; }
+      body.mo-cat-big .mo-cat-card img.mo-cat-img { width: 100% !important; height: 215px !important; max-height: 215px !important; object-fit: cover !important; display: block !important; border-radius: 8px 8px 0 0 !important; }
+      /* The khong bi keo dai theo the cao nhat, bot khoang trong chet giua the */
+      body.mo-cat-big .mo-cat-card { display: flex !important; flex-direction: column !important; }
+      /* Ghi chu studio dai thi chi hien 2 dong, bam mo ra van xem duoc trong Media & description */
+      body.mo-cat-big .mo-cat-card .mo-cat-note { display: -webkit-box !important; -webkit-line-clamp: 2 !important; -webkit-box-orient: vertical !important; overflow: hidden !important; }
+      /* Thanh loc dinh tren gon lai de de luot */
+      body.mo-cat-big main { max-width: none !important; }
+    `;
+    document.head.appendChild(style);
+    document.body.classList.add('mo-cat-big');
+    tagCatalogCards();
+    const obs = new MutationObserver(() => tagCatalogCards());
+    obs.observe(document.body, { childList: true, subtree: true });
+  }
+  function tagCatalogCards() {
+    if (location.search.includes('view=calendar')) return;
+    if (!location.pathname.includes('/creators')) return;
+    // Luoi: phan tu cha cua cac <article> the game
+    document.querySelectorAll('article').forEach(a => {
+      const img = a.querySelector('a:first-child > img[src*="steamstatic.com/store_item_assets/steam/apps/"], img[src*="steamstatic.com/store_item_assets/steam/apps/"]');
+      if (!img) return;
+      img.classList.add('mo-cat-img');
+      a.classList.add('mo-cat-card');
+      if (a.parentElement) a.parentElement.classList.add('mo-cat-grid');
+      // Danh dau ghi chu studio de cat gon 2 dong
+      a.querySelectorAll('*').forEach(el => {
+        if (/^From the studio:/i.test((el.innerText || '').trim())) el.classList.add('mo-cat-note');
+      });
+    });
+  }
+  applyCatalogBigImages();
+
+  // ---- Tuy chon: CHI CO 2 MUC trong menu Tampermonkey, KHONG hien gi tren trang ----
+  // Bấm vào biểu tượng Tampermonkey > tên script này > chỉ thấy 2 mục:
+  //   1. CÀO - chạy cào hết và gửi vào Sheet ngay
+  //   2. Cài đặt - bấm vào mới hiện ra 1 bảng chọn (popup), chọn xong bấm Lưu là đóng, bình thường không hiện gì.
   let FILTERS = {
     minPrice: parseFloat(GM_getValue('mo_min_price', '0')) || 0,
     minReviewPct: parseFloat(GM_getValue('mo_min_review_pct', '50')) || 0,
@@ -91,42 +141,47 @@
   };
   function setStatus(msg) {
     console.log('[MadOctopus]', msg);
-    // Chi thong bao khi xong hoac loi, khong spam giua chung
     if (/^XONG|^Lỗi|^Dừng/.test(msg)) {
       try { GM_notification({ title: 'MadOctopus', text: msg, timeout: 8000 }); } catch (e) {}
     }
   }
-  function askNumber(label, current) {
-    const v = prompt(label + ' (hiện tại: ' + current + ', nhập 0 = không lọc):', String(current));
-    if (v === null) return null;
-    const n = parseFloat(v);
-    return isNaN(n) || n < 0 ? 0 : n;
+  function openSettings() {
+    if (document.getElementById('mo-settings')) { document.getElementById('mo-settings').remove(); }
+    const ov = document.createElement('div');
+    ov.id = 'mo-settings';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font:14px/1.6 Arial,sans-serif';
+    ov.innerHTML = '<div style="background:#1a1a2e;color:#fff;padding:20px;border-radius:12px;width:420px;max-width:92vw;box-shadow:0 8px 30px rgba(0,0,0,.5)">' +
+      '<h3 style="margin:0 0 12px">MadOctopus — Cài đặt</h3>' +
+      '<label style="display:block;margin:8px 0">Apps Script Web App URL (/exec)<br><input id="mo-s-url" type="text" value="' + WEBAPP_URL.replace(/"/g, '&quot;') + '" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#111;color:#fff"></label>' +
+      '<label style="display:block;margin:8px 0">Giá tối thiểu $ <span style="color:#aaa">(0 = không lọc, chưa có giá vẫn lấy)</span><br><input id="mo-s-price" type="number" min="0" step="1" value="' + FILTERS.minPrice + '" style="width:100px;padding:6px;border-radius:6px;border:1px solid #555;background:#111;color:#fff"></label>' +
+      '<label style="display:block;margin:8px 0">% review tối thiểu <span style="color:#aaa">(chưa có review vẫn lấy)</span><br><input id="mo-s-pct" type="number" min="0" max="100" step="1" value="' + FILTERS.minReviewPct + '" style="width:100px;padding:6px;border-radius:6px;border:1px solid #555;background:#111;color:#fff"></label>' +
+      '<label style="display:block;margin:8px 0">Số review tối thiểu <span style="color:#aaa">(0 = không lọc, chưa có review vẫn lấy)</span><br><input id="mo-s-count" type="number" min="0" step="1" value="' + FILTERS.minReviewCount + '" style="width:100px;padding:6px;border-radius:6px;border:1px solid #555;background:#111;color:#fff"></label>' +
+      '<div style="margin-top:16px;display:flex;gap:8px">' +
+      '<button id="mo-s-save" style="background:#ff6b35;color:#fff;border:0;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:bold">Lưu</button>' +
+      '<button id="mo-s-clear" style="background:#444;color:#fff;border:0;padding:8px 12px;border-radius:6px;cursor:pointer">Tắt hết lọc</button>' +
+      '<button id="mo-s-close" style="background:#222;color:#fff;border:0;padding:8px 12px;border-radius:6px;cursor:pointer">Đóng</button>' +
+      '</div></div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+    ov.querySelector('#mo-s-close').onclick = () => ov.remove();
+    ov.querySelector('#mo-s-clear').onclick = () => {
+      ov.querySelector('#mo-s-price').value = '0'; ov.querySelector('#mo-s-pct').value = '0'; ov.querySelector('#mo-s-count').value = '0';
+    };
+    ov.querySelector('#mo-s-save').onclick = () => {
+      const u = ov.querySelector('#mo-s-url').value.trim();
+      if (u) { WEBAPP_URL = u; GM_setValue('mo_webapp_url', u); }
+      FILTERS.minPrice = parseFloat(ov.querySelector('#mo-s-price').value) || 0;
+      FILTERS.minReviewPct = parseFloat(ov.querySelector('#mo-s-pct').value) || 0;
+      FILTERS.minReviewCount = parseFloat(ov.querySelector('#mo-s-count').value) || 0;
+      GM_setValue('mo_min_price', String(FILTERS.minPrice));
+      GM_setValue('mo_min_review_pct', String(FILTERS.minReviewPct));
+      GM_setValue('mo_min_review_count', String(FILTERS.minReviewCount));
+      ov.remove();
+      alert('Đã lưu cài đặt.\nGiá tối thiểu: $' + FILTERS.minPrice + '\n% review tối thiểu: ' + FILTERS.minReviewPct + '%\nSố review tối thiểu: ' + FILTERS.minReviewCount);
+    };
   }
-  GM_registerMenuCommand('▶ Cào hết & gửi vào Sheet', () => run().catch(e => setStatus('Lỗi: ' + e.message)));
-  GM_registerMenuCommand('Đặt Apps Script Web App URL', () => {
-    const u = prompt('Dán Apps Script Web App URL (/exec):', WEBAPP_URL);
-    if (u) { WEBAPP_URL = u.trim(); GM_setValue('mo_webapp_url', WEBAPP_URL); alert('Đã lưu Web App URL.'); }
-  });
-  GM_registerMenuCommand('Đặt lọc: Giá tối thiểu $ (hiện tại: ' + FILTERS.minPrice + ')', () => {
-    const n = askNumber('Giá tối thiểu $ - game nào giá dưới mức này thì bỏ, chưa có giá vẫn lấy', FILTERS.minPrice);
-    if (n !== null) { FILTERS.minPrice = n; GM_setValue('mo_min_price', String(n)); alert('Đã lưu: Giá tối thiểu $' + n); }
-  });
-  GM_registerMenuCommand('Đặt lọc: % review tối thiểu (hiện tại: ' + FILTERS.minReviewPct + ')', () => {
-    const n = askNumber('% review tối thiểu - game nào có review mà % dưới mức này thì bỏ, chưa có review vẫn lấy', FILTERS.minReviewPct);
-    if (n !== null) { FILTERS.minReviewPct = n; GM_setValue('mo_min_review_pct', String(n)); alert('Đã lưu: % review tối thiểu ' + n); }
-  });
-  GM_registerMenuCommand('Đặt lọc: Số review tối thiểu (hiện tại: ' + FILTERS.minReviewCount + ')', () => {
-    const n = askNumber('Số review tối thiểu - game nào có review mà số review dưới mức này thì bỏ, chưa có review vẫn lấy', FILTERS.minReviewCount);
-    if (n !== null) { FILTERS.minReviewCount = n; GM_setValue('mo_min_review_count', String(n)); alert('Đã lưu: Số review tối thiểu ' + n); }
-  });
-  GM_registerMenuCommand('Xem bộ lọc hiện tại', () => {
-    alert('Bộ lọc hiện tại:\n- Giá tối thiểu: $' + FILTERS.minPrice + ' (0 = không lọc)\n- % review tối thiểu: ' + FILTERS.minReviewPct + '%\n- Số review tối thiểu: ' + FILTERS.minReviewCount + ' (0 = không lọc)\n\nChưa có giá / review vẫn lấy.');
-  });
-  GM_registerMenuCommand('Tắt hết lọc (đặt tất cả về 0)', () => {
-    FILTERS = { minPrice: 0, minReviewPct: 0, minReviewCount: 0 };
-    GM_setValue('mo_min_price', '0'); GM_setValue('mo_min_review_pct', '0'); GM_setValue('mo_min_review_count', '0');
-    alert('Đã tắt hết lọc.');
-  });
+  GM_registerMenuCommand('CÀO', () => run().catch(e => setStatus('Lỗi: ' + e.message)));
+  GM_registerMenuCommand('Cài đặt', () => openSettings());
 
   function findCards() {
     const btns = [...document.querySelectorAll('button, a')].filter(el =>
